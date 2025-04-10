@@ -57,6 +57,7 @@
     display: block;
     aspect-ratio: 1/1;
 }
+  
 
 .middle-text {
     font-size: clamp(0.8rem, 2vw, 1.2rem);
@@ -69,15 +70,26 @@
     font-weight: 700;
 }
 
-@media only screen and (max-width: 700px) {
+.marquee-container {
+    height: 50vh;
+    width: 100%;
+}
+
+.marquee-container img {
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+}
+
+@media only screen and (max-width: 900px) {
     .gallery {
         flex-wrap: wrap;
         justify-content: space-between;
     }
 
     .item {
-        width: 49.5%; 
-        margin-bottom: 10px; 
+        width: 48%; 
+        margin-bottom: 10px;
     }
 
     .middle-text {
@@ -91,6 +103,10 @@
         aspect-ratio: 1 / 1;
         object-fit: contain;
       }
+      .marquee-container {
+        height: 40vh;
+        width: 100%;
+    }
 
     
 }
@@ -118,6 +134,11 @@
     }
     .text-background-2 {
         font-size: 20px;
+    }
+
+    .marquee-container {
+        height: 30vh;
+        width: 100%;
     }
 }
   
