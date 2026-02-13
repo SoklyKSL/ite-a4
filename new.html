@@ -1,95 +1,165 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Live Video Capture: Paper Signature + Thumb Presence</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Guided Video Capture: Face + Signed Paper + Thumb</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    .wrap { max-width: 980px; margin: 0 auto; }
+    .wrap { max-width: 1000px; margin: 0 auto; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; margin-top: 12px; }
-    video { width: 100%; border-radius: 12px; background: #111; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top: 10px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    video, canvas { width: 100%; border-radius: 12px; background:#111; border:1px solid #ddd; }
     button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background:#fff; cursor:pointer; }
     button:disabled { opacity:.5; cursor:not-allowed; }
-    .status { font-weight: 650; }
-    .small { font-size: 12px; color: #444; }
-    .pill { padding: 6px 10px; border:1px solid #ddd; border-radius:999px; }
+    .pill { padding: 6px 10px; border-radius: 999px; border:1px solid #ddd; }
+    .ok { border-color: #5cb85c; }
+    .bad { border-color: #d9534f; }
+    .msg { font-weight: 650; }
+    .small { font-size: 12px; color:#444; }
+    .two { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h2>Record ONE Live Video: Physical Signature + Thumb</h2>
+  <h2>Guided Live Recording (Face + Signed Paper + Thumb)</h2>
   <p class="small">
-    This records a single clip that contains both: (1) the signed paper and (2) the user showing thumb.
+    This guides the user with real-time feedback. Recording is only enabled when the current step passes checks.
+    Best on Chrome/Edge. Use HTTPS or localhost.
   </p>
 
   <div class="card">
-    <video id="preview" playsinline></video>
-
-    <div class="row">
-      <button id="btnStartCam">Start camera</button>
-      <button id="btnStartRec" disabled>Start recording</button>
-      <button id="btnStopRec" disabled>Stop recording</button>
+    <div class="row" style="margin-bottom:10px;">
       <span class="pill" id="stepPill">Step: idle</span>
-      <span class="status" id="status">Status: idle</span>
+      <span class="pill" id="facePill">Face: -</span>
+      <span class="pill" id="paperPill">Paper: -</span>
+      <span class="pill" id="thumbPill">Thumb: -</span>
     </div>
 
-    <div class="row">
-      <button id="btnStep1" disabled>Step 1: Signed paper</button>
-      <button id="btnStep2" disabled>Step 2: Thumb</button>
+    <div style="position:relative;">
+      <video id="video" playsinline></video>
+      <canvas id="overlay" style="position:absolute; left:0; top:0;"></canvas>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="btnStartCam">Start camera</button>
+      <button id="btnNext" disabled>Next step</button>
+      <button id="btnStartRec" disabled>Start recording</button>
+      <button id="btnStopRec" disabled>Stop recording</button>
+      <span class="msg" id="msg">Status: idle</span>
     </div>
 
     <p class="small">
-      Tip: use the back camera for clearer paper. Works best on Chrome/Edge (Android/Desktop).
-      iOS Safari MediaRecorder support varies by iOS version.
+      Steps:
+      (1) Show face clearly →
+      (2) Show signed paper clearly (fill frame, avoid glare) →
+      (3) Show thumb close to camera.
     </p>
   </div>
 
-  <div class="card">
-    <h3>Recorded Video</h3>
-    <video id="playback" controls></video>
-    <div class="row">
-      <button id="btnDownload" disabled>Download video</button>
+  <div class="card two">
+    <div>
+      <h3>Recorded Video</h3>
+      <video id="playback" controls></video>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnDownload" disabled>Download video</button>
+      </div>
+    </div>
+    <div>
+      <h3>Diagnostics (live)</h3>
+      <canvas id="analyze" height="240"></canvas>
+      <p class="small" id="diagText">Waiting for camera…</p>
+      <p class="small">
+        Heuristics: brightness + focus (blur) + “paper-like big bright rectangle” estimate.
+      </p>
     </div>
   </div>
 </div>
 
-<!-- MediaPipe Hands -->
+<!-- MediaPipe -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
 
 <script>
-  const preview = document.getElementById("preview");
-  const playback = document.getElementById("playback");
+  // ---------- Elements ----------
+  const video = document.getElementById("video");
+  const overlay = document.getElementById("overlay");
+  const octx = overlay.getContext("2d");
+
+  const analyze = document.getElementById("analyze");
+  const actx = analyze.getContext("2d");
+  const diagText = document.getElementById("diagText");
+
+  const stepPill = document.getElementById("stepPill");
+  const facePill = document.getElementById("facePill");
+  const paperPill = document.getElementById("paperPill");
+  const thumbPill = document.getElementById("thumbPill");
+
+  const msg = document.getElementById("msg");
 
   const btnStartCam = document.getElementById("btnStartCam");
+  const btnNext = document.getElementById("btnNext");
   const btnStartRec = document.getElementById("btnStartRec");
-  const btnStopRec  = document.getElementById("btnStopRec");
+  const btnStopRec = document.getElementById("btnStopRec");
   const btnDownload = document.getElementById("btnDownload");
 
-  const btnStep1 = document.getElementById("btnStep1");
-  const btnStep2 = document.getElementById("btnStep2");
+  const playback = document.getElementById("playback");
 
-  const statusEl = document.getElementById("status");
-  const stepPill = document.getElementById("stepPill");
-
+  // ---------- State ----------
   let stream = null;
+  let mpCamera = null;
+
+  let faceDet = null;
+  let hands = null;
+
+  // detections
+  let hasFace = false;
+  let hasHand = false;
+  let hasThumb = false;
+
+  // paper heuristics
+  let paperOk = false;
+  let brightness = 0;
+  let focusScore = 0;
+  let paperCoverage = 0;
+
+  // steps: 0 idle, 1 face, 2 paper, 3 thumb, 4 ready-to-record
+  let step = 0;
+
+  // recording
   let recorder = null;
   let chunks = [];
   let recordedBlob = null;
 
-  // MediaPipe
-  let hands = null;
-  let mpCamera = null;
-
-  let step = "idle"; // "paper" | "thumb"
-  function setStep(s) {
-    step = s;
-    if (s === "paper") stepPill.textContent = "Step: show signed paper";
-    else if (s === "thumb") stepPill.textContent = "Step: show thumb";
-    else stepPill.textContent = "Step: idle";
+  // ---------- Utils ----------
+  function setPill(el, label, okState) {
+    el.textContent = label;
+    el.classList.remove("ok","bad");
+    if (okState === true) el.classList.add("ok");
+    if (okState === false) el.classList.add("bad");
   }
+
+  function ensureOverlaySize() {
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    overlay.width = w;
+    overlay.height = h;
+  }
+
+  function setStep(n) {
+    step = n;
+    const names = {
+      0: "idle",
+      1: "1/3 Face",
+      2: "2/3 Signed paper",
+      3: "3/3 Thumb",
+      4: "Ready"
+    };
+    stepPill.textContent = "Step: " + (names[n] || "unknown");
+  }
+
+  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
   function pickBestMime() {
     const candidates = [
@@ -97,68 +167,189 @@
       "video/webm;codecs=vp8,opus",
       "video/webm"
     ];
-    for (const t of candidates) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
-    }
-    return ""; // let browser decide
+    for (const t of candidates) if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+    return "";
   }
 
-  async function startCamera() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      alert("getUserMedia not supported in this browser.");
-      return;
+  // ---------- Paper heuristics (no ML) ----------
+  // We'll downscale frame for speed, compute:
+  // - brightness avg
+  // - focus via Laplacian variance-like measure
+  // - paper coverage: fraction of pixels above a brightness threshold + edge density heuristic
+  function analyzeFrame() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    // draw small frame into analyze canvas
+    const targetW = analyze.width;
+    const targetH = Math.floor(targetW * (vh / vw));
+    analyze.height = targetH;
+
+    actx.drawImage(video, 0, 0, targetW, targetH);
+    const img = actx.getImageData(0,0,targetW,targetH);
+    const d = img.data;
+
+    // grayscale array
+    const g = new Float32Array(targetW * targetH);
+
+    let sum = 0;
+    for (let i=0, p=0; i<d.length; i+=4, p++) {
+      // luminance
+      const y = 0.2126*d[i] + 0.7152*d[i+1] + 0.0722*d[i+2];
+      g[p] = y;
+      sum += y;
     }
+    brightness = sum / g.length; // 0..255
 
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }, // back cam for paper
-      audio: true
+    // focus score: simple Laplacian energy
+    // lap = | -4*c + up+down+left+right |
+    let lapSum = 0;
+    let lapSqSum = 0;
+    let count = 0;
+    for (let y=1; y<targetH-1; y++) {
+      for (let x=1; x<targetW-1; x++) {
+        const idx = y*targetW + x;
+        const c = g[idx];
+        const lap = Math.abs(-4*c + g[idx-1] + g[idx+1] + g[idx-targetW] + g[idx+targetW]);
+        lapSum += lap;
+        lapSqSum += lap*lap;
+        count++;
+      }
+    }
+    const meanLap = lapSum / Math.max(1,count);
+    const meanLapSq = lapSqSum / Math.max(1,count);
+    // variance as focus proxy
+    focusScore = meanLapSq - meanLap*meanLap;
+
+    // paper coverage estimate:
+    // paper tends to be bright. Count pixels above threshold (adaptive-ish)
+    const thr = Math.max(160, brightness + 25);
+    let brightCount = 0;
+    for (let i=0; i<g.length; i++) if (g[i] > thr) brightCount++;
+    paperCoverage = brightCount / g.length; // 0..1
+
+    // Paper OK heuristic:
+    // - enough brightness
+    // - enough focus
+    // - enough bright coverage
+    // thresholds tuned for "good enough"
+    const brightOK = brightness >= 90;
+    const focusOK = focusScore >= 120;       // increase if too sensitive
+    const coverOK = paperCoverage >= 0.20;   // paper should cover meaningful part of frame
+
+    paperOk = brightOK && focusOK && coverOK;
+
+    diagText.textContent =
+      `brightness=${brightness.toFixed(1)} (ok>=90), focus=${focusScore.toFixed(1)} (ok>=120), paperCoverage=${(paperCoverage*100).toFixed(1)}% (ok>=20%)`;
+  }
+
+  // ---------- MediaPipe setup ----------
+  function setupFace() {
+    faceDet = new FaceDetection({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
     });
+    faceDet.setOptions({ model: "short", minDetectionConfidence: 0.6 });
+    faceDet.onResults((res) => {
+      hasFace = !!(res.detections && res.detections.length);
+    });
+  }
 
-    preview.srcObject = stream;
-    await preview.play();
-
-    // Setup MediaPipe Hands (for thumb presence status only)
-    hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+  function setupHands() {
+    hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
     hands.setOptions({
       maxNumHands: 1,
       modelComplexity: 1,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6
     });
-
     hands.onResults((res) => {
-      // Only care in thumb step
-      if (step !== "thumb") return;
+      hasHand = !!(res.multiHandLandmarks && res.multiHandLandmarks.length);
+      hasThumb = false;
 
-      const hasHand = !!(res.multiHandLandmarks && res.multiHandLandmarks.length);
-      if (!hasHand) {
-        statusEl.textContent = "Status: (thumb step) no hand detected";
-        return;
+      if (hasHand) {
+        // thumb tip index 4 exists if hand exists
+        hasThumb = true;
       }
-      // Thumb tip landmark exists if hand exists
-      statusEl.textContent = "Status: (thumb step) thumb/hand detected ✅";
     });
-
-    // Drive frames to MediaPipe
-    mpCamera = new Camera(preview, {
-      onFrame: async () => { await hands.send({ image: preview }); },
-      width: 640,
-      height: 480
-    });
-    mpCamera.start();
-
-    btnStartRec.disabled = false;
-    btnStep1.disabled = false;
-    btnStep2.disabled = false;
-    btnStartCam.disabled = true;
-
-    setStep("paper");
-    statusEl.textContent = "Status: camera ready";
   }
 
-  function startRecording() {
-    if (!stream) return;
+  // ---------- Guidance logic ----------
+  function drawGuides() {
+    ensureOverlaySize();
+    octx.clearRect(0,0,overlay.width, overlay.height);
 
+    // show a guide box for paper step
+    if (step === 2) {
+      const w = overlay.width, h = overlay.height;
+      octx.strokeStyle = "#00ff88";
+      octx.lineWidth = 3;
+      const margin = Math.round(Math.min(w,h)*0.12);
+      octx.strokeRect(margin, margin, w-2*margin, h-2*margin);
+      octx.font = "18px system-ui, Arial";
+      octx.fillStyle = "#00ff88";
+      octx.fillText("Align paper inside box", margin+8, margin+24);
+    }
+
+    // show target circle for thumb step
+    if (step === 3) {
+      const w = overlay.width, h = overlay.height;
+      octx.strokeStyle = "#00ff88";
+      octx.lineWidth = 3;
+      octx.beginPath();
+      octx.arc(w/2, h/2, 60, 0, Math.PI*2);
+      octx.stroke();
+      octx.font = "18px system-ui, Arial";
+      octx.fillStyle = "#00ff88";
+      octx.fillText("Put thumb near center", 20, 30);
+    }
+  }
+
+  function currentStepPasses() {
+    if (step === 1) return hasFace;
+    if (step === 2) return paperOk;      // paper quality check
+    if (step === 3) return hasThumb;     // thumb presence
+    if (step === 4) return (hasFace && paperOk && hasThumb);
+    return false;
+  }
+
+  function updateUI() {
+    setPill(facePill, "Face: " + (hasFace ? "OK" : "Missing"), hasFace ? true : false);
+    setPill(paperPill, "Paper: " + (paperOk ? "OK" : "Not clear"), paperOk ? true : false);
+    setPill(thumbPill, "Thumb: " + (hasThumb ? "OK" : "Missing"), hasThumb ? true : false);
+
+    drawGuides();
+
+    // Guidance message
+    if (step === 1) {
+      msg.textContent = hasFace ? "Status: Face detected ✅ (press Next)" : "Status: Please show your face clearly";
+    } else if (step === 2) {
+      if (!paperOk) {
+        // more specific guidance based on sub-metrics
+        if (brightness < 90) msg.textContent = "Status: Paper too dark — add light / reduce shadow";
+        else if (focusScore < 120) msg.textContent = "Status: Too blurry — hold steady / move camera farther then refocus";
+        else if (paperCoverage < 0.20) msg.textContent = "Status: Paper too small — move paper closer / fill the frame";
+        else msg.textContent = "Status: Adjust paper — avoid glare, keep flat";
+      } else {
+        msg.textContent = "Status: Signed paper looks clear ✅ (press Next)";
+      }
+    } else if (step === 3) {
+      msg.textContent = hasThumb ? "Status: Thumb detected ✅ (press Next)" : "Status: Please show your thumb/hand close to camera";
+    } else if (step === 4) {
+      msg.textContent = currentStepPasses()
+        ? "Status: All checks passed ✅ You can start recording"
+        : "Status: Fix missing items before recording";
+    } else {
+      msg.textContent = "Status: idle";
+    }
+
+    btnNext.disabled = !(step >= 1 && step <= 3 && currentStepPasses());
+    btnStartRec.disabled = !(step === 4 && currentStepPasses() && stream && (!recorder || recorder.state === "inactive"));
+  }
+
+  // ---------- Recording ----------
+  function startRecording() {
     chunks = [];
     recordedBlob = null;
     playback.removeAttribute("src");
@@ -167,30 +358,25 @@
     const mimeType = pickBestMime();
     recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
 
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunks.push(e.data);
-    };
-
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
     recorder.onstop = () => {
       recordedBlob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
       const url = URL.createObjectURL(recordedBlob);
       playback.src = url;
       btnDownload.disabled = false;
-      statusEl.textContent = "Status: recorded ✅ (ready to download)";
+      msg.textContent = "Status: Recorded ✅ (download ready)";
+      btnStopRec.disabled = true;
+      btnStartRec.disabled = false;
     };
 
-    recorder.start(250); // collect data every 250ms
-    btnStartRec.disabled = true;
+    recorder.start(250);
     btnStopRec.disabled = false;
-    statusEl.textContent = "Status: recording...";
-    setStep("paper"); // start with paper
+    btnStartRec.disabled = true;
+    msg.textContent = "Status: Recording... keep face + paper + thumb visible during your flow";
   }
 
   function stopRecording() {
     if (recorder && recorder.state !== "inactive") recorder.stop();
-    btnStopRec.disabled = true;
-    btnStartRec.disabled = false;
-    setStep("idle");
   }
 
   function downloadVideo() {
@@ -198,33 +384,66 @@
     const url = URL.createObjectURL(recordedBlob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "signature_and_thumb_video.webm";
+    a.download = "guided_face_paper_thumb.webm";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    // keep url around for playback; don't revoke immediately
   }
 
-  // UI actions
-  btnStartCam.onclick = () => startCamera().catch(err => {
+  // ---------- Main loop ----------
+  async function startCam() {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: true
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    setupFace();
+    setupHands();
+
+    // camera loop: send frames to both models + run heuristics
+    mpCamera = new Camera(video, {
+      onFrame: async () => {
+        analyzeFrame();
+        await faceDet.send({ image: video });
+        await hands.send({ image: video });
+        updateUI();
+      },
+      width: 640,
+      height: 480
+    });
+    mpCamera.start();
+
+    btnStartCam.disabled = true;
+    setStep(1);
+    msg.textContent = "Status: Please show your face clearly";
+    updateUI();
+  }
+
+  // ---------- Buttons ----------
+  btnStartCam.onclick = () => startCam().catch(err => {
     console.error(err);
     alert("Camera start failed: " + err.message);
   });
 
+  btnNext.onclick = () => {
+    if (step === 1 && hasFace) setStep(2);
+    else if (step === 2 && paperOk) setStep(3);
+    else if (step === 3 && hasThumb) setStep(4);
+    updateUI();
+  };
+
   btnStartRec.onclick = () => startRecording();
   btnStopRec.onclick = () => stopRecording();
 
-  btnStep1.onclick = () => {
-    setStep("paper");
-    statusEl.textContent = "Status: show the signed paper clearly in frame";
-  };
-
-  btnStep2.onclick = () => {
-    setStep("thumb");
-    statusEl.textContent = "Status: show your thumb close to the camera";
-  };
-
   btnDownload.onclick = () => downloadVideo();
+
+  // init
+  setStep(0);
+  setPill(facePill, "Face: -", null);
+  setPill(paperPill, "Paper: -", null);
+  setPill(thumbPill, "Thumb: -", null);
 </script>
 </body>
 </html>
