@@ -3,361 +3,228 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Physical Signature + Thumb Presence Capture (Demo)</title>
+  <title>Live Video Capture: Paper Signature + Thumb Presence</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; }
-    video, canvas, img { width: 100%; border-radius: 12px; border: 1px solid #ddd; background: #111; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    .small { font-size: 12px; color: #444; }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; margin-top: 12px; }
+    video { width: 100%; border-radius: 12px; background: #111; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top: 10px; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background:#fff; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
     .status { font-weight: 650; }
-    .step { padding: 6px 10px; border-radius: 999px; border: 1px solid #ddd; }
-    .active { background:#f3f3f3; }
+    .small { font-size: 12px; color: #444; }
+    .pill { padding: 6px 10px; border:1px solid #ddd; border-radius:999px; }
   </style>
 </head>
 <body>
-  <h2>Physical Signature + Thumb Presence (Camera Demo)</h2>
+<div class="wrap">
+  <h2>Record ONE Live Video: Physical Signature + Thumb</h2>
   <p class="small">
-    Step 1: Put signed paper in view → Capture signature photo.<br/>
-    Step 2: Show thumb → Hold thumb tip inside circle → Auto-capture thumb evidence.
+    This records a single clip that contains both: (1) the signed paper and (2) the user showing thumb.
   </p>
 
-  <div class="row" style="margin-bottom:12px;">
-    <span id="pill1" class="step active">1) Capture signature photo</span>
-    <span id="pill2" class="step">2) Capture thumb presence</span>
-  </div>
+  <div class="card">
+    <video id="preview" playsinline></video>
 
-  <div class="grid">
-    <div class="card">
-      <h3>Live Camera</h3>
-      <div style="position:relative;">
-        <video id="video" playsinline></video>
-        <canvas id="overlay" style="position:absolute; left:0; top:0;"></canvas>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <button id="btnStart">Start camera</button>
-        <button id="btnCaptureSig" disabled>Capture signature photo</button>
-        <button id="btnGoThumb" disabled>Go to thumb step</button>
-        <button id="btnReset" disabled>Reset</button>
-      </div>
-
-      <div class="row" style="margin-top:8px;">
-        <span class="status" id="status">Status: idle</span>
-      </div>
-
-      <p class="small">
-        Tips for signature photo: use good light, fill the frame with paper, avoid glare, keep it flat.
-      </p>
+    <div class="row">
+      <button id="btnStartCam">Start camera</button>
+      <button id="btnStartRec" disabled>Start recording</button>
+      <button id="btnStopRec" disabled>Stop recording</button>
+      <span class="pill" id="stepPill">Step: idle</span>
+      <span class="status" id="status">Status: idle</span>
     </div>
 
-    <div class="card">
-      <h3>Captured Evidence</h3>
-      <p class="small">Signature photo (physical paper)</p>
-      <img id="sigPreview" alt="signature photo preview" />
-
-      <p class="small" style="margin-top:10px;">Thumb presence evidence (cropped around thumb)</p>
-      <img id="thumbPreview" alt="thumb evidence preview" />
-
-      <div class="row" style="margin-top:10px;">
-        <button id="btnDownloadSig" disabled>Download signature photo</button>
-        <button id="btnDownloadThumb" disabled>Download thumb evidence</button>
-        <button id="btnDownloadBoth" disabled>Download both</button>
-      </div>
-
-      <p class="small">
-        Note: this is “thumb presence proof”, not fingerprint ridge matching.
-      </p>
+    <div class="row">
+      <button id="btnStep1" disabled>Step 1: Signed paper</button>
+      <button id="btnStep2" disabled>Step 2: Thumb</button>
     </div>
+
+    <p class="small">
+      Tip: use the back camera for clearer paper. Works best on Chrome/Edge (Android/Desktop).
+      iOS Safari MediaRecorder support varies by iOS version.
+    </p>
   </div>
 
-  <!-- MediaPipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+  <div class="card">
+    <h3>Recorded Video</h3>
+    <video id="playback" controls></video>
+    <div class="row">
+      <button id="btnDownload" disabled>Download video</button>
+    </div>
+  </div>
+</div>
 
-  <script>
-    // ---------- Helpers ----------
-    function downloadDataUrl(filename, dataUrl) {
-      const a = document.createElement("a");
-      a.href = dataUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+
+<script>
+  const preview = document.getElementById("preview");
+  const playback = document.getElementById("playback");
+
+  const btnStartCam = document.getElementById("btnStartCam");
+  const btnStartRec = document.getElementById("btnStartRec");
+  const btnStopRec  = document.getElementById("btnStopRec");
+  const btnDownload = document.getElementById("btnDownload");
+
+  const btnStep1 = document.getElementById("btnStep1");
+  const btnStep2 = document.getElementById("btnStep2");
+
+  const statusEl = document.getElementById("status");
+  const stepPill = document.getElementById("stepPill");
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let recordedBlob = null;
+
+  // MediaPipe
+  let hands = null;
+  let mpCamera = null;
+
+  let step = "idle"; // "paper" | "thumb"
+  function setStep(s) {
+    step = s;
+    if (s === "paper") stepPill.textContent = "Step: show signed paper";
+    else if (s === "thumb") stepPill.textContent = "Step: show thumb";
+    else stepPill.textContent = "Step: idle";
+  }
+
+  function pickBestMime() {
+    const candidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm"
+    ];
+    for (const t of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
     }
-    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-    function dist(a, b) { const dx = a.x - b.x; const dy = a.y - b.y; return Math.hypot(dx, dy); }
+    return ""; // let browser decide
+  }
 
-    // ---------- UI ----------
-    const video = document.getElementById("video");
-    const overlay = document.getElementById("overlay");
-    const octx = overlay.getContext("2d");
-
-    const btnStart = document.getElementById("btnStart");
-    const btnCaptureSig = document.getElementById("btnCaptureSig");
-    const btnGoThumb = document.getElementById("btnGoThumb");
-    const btnReset = document.getElementById("btnReset");
-
-    const statusEl = document.getElementById("status");
-    const sigPreview = document.getElementById("sigPreview");
-    const thumbPreview = document.getElementById("thumbPreview");
-
-    const btnDownloadSig = document.getElementById("btnDownloadSig");
-    const btnDownloadThumb = document.getElementById("btnDownloadThumb");
-    const btnDownloadBoth = document.getElementById("btnDownloadBoth");
-
-    const pill1 = document.getElementById("pill1");
-    const pill2 = document.getElementById("pill2");
-
-    // ---------- State ----------
-    let step = 1; // 1 signature photo, 2 thumb
-    let camera = null;
-    let hands = null;
-
-    let sigDataUrl = null;
-    let thumbDataUrl = null;
-
-    // thumb detection state
-    const TARGET_RADIUS = 55;
-    const STEADY_WINDOW = 12;
-    const STEADY_MAX_MOVE = 18;
-    const NEED_STEADY_FRAMES = 10;
-    let history = [];
-    let thumbCaptured = false;
-
-    function setStep(n) {
-      step = n;
-      pill1.classList.toggle("active", step === 1);
-      pill2.classList.toggle("active", step === 2);
-
-      if (step === 1) {
-        statusEl.textContent = "Status: Step 1 — capture signature photo (paper)";
-      } else {
-        statusEl.textContent = "Status: Step 2 — show thumb tip in circle and hold steady";
-      }
+  async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert("getUserMedia not supported in this browser.");
+      return;
     }
 
-    function ensureOverlaySize() {
-      const w = video.videoWidth || 640;
-      const h = video.videoHeight || 480;
-      overlay.width = w;
-      overlay.height = h;
-    }
-
-    function drawTargetCircle() {
-      const w = overlay.width, h = overlay.height;
-      const target = { x: w/2, y: h/2 };
-      octx.beginPath();
-      octx.arc(target.x, target.y, TARGET_RADIUS, 0, Math.PI*2);
-      octx.lineWidth = 3;
-      octx.strokeStyle = "#00ff88";
-      octx.stroke();
-      return target;
-    }
-
-    function captureFullFrame() {
-      const w = video.videoWidth, h = video.videoHeight;
-      const c = document.createElement("canvas");
-      c.width = w; c.height = h;
-      const ctx = c.getContext("2d");
-      ctx.drawImage(video, 0, 0, w, h);
-      return c.toDataURL("image/png");
-    }
-
-    function captureThumbCrop(thumbPx) {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-
-      const temp = document.createElement("canvas");
-      temp.width = w; temp.height = h;
-      const tctx = temp.getContext("2d");
-      tctx.drawImage(video, 0, 0, w, h);
-
-      const r = 140;
-      const x1 = clamp(Math.floor(thumbPx.x - r), 0, w);
-      const y1 = clamp(Math.floor(thumbPx.y - r), 0, h);
-      const x2 = clamp(Math.floor(thumbPx.x + r), 0, w);
-      const y2 = clamp(Math.floor(thumbPx.y + r), 0, h);
-
-      const cw = x2 - x1, ch = y2 - y1;
-
-      const crop = document.createElement("canvas");
-      crop.width = cw; crop.height = ch;
-      const cctx = crop.getContext("2d");
-      cctx.drawImage(temp, x1, y1, cw, ch, 0, 0, cw, ch);
-
-      return crop.toDataURL("image/png");
-    }
-
-    function isSteady(hist) {
-      if (hist.length < NEED_STEADY_FRAMES) return false;
-      const base = hist[0];
-      let maxD = 0;
-      for (const p of hist) maxD = Math.max(maxD, dist(p, base));
-      return maxD <= STEADY_MAX_MOVE;
-    }
-
-    function updateDownloadButtons() {
-      btnDownloadSig.disabled = !sigDataUrl;
-      btnDownloadThumb.disabled = !thumbDataUrl;
-      btnDownloadBoth.disabled = !(sigDataUrl && thumbDataUrl);
-    }
-
-    function resetAll() {
-      sigDataUrl = null;
-      thumbDataUrl = null;
-      sigPreview.removeAttribute("src");
-      thumbPreview.removeAttribute("src");
-      history = [];
-      thumbCaptured = false;
-      setStep(1);
-
-      btnCaptureSig.disabled = true;
-      btnGoThumb.disabled = true;
-      btnReset.disabled = false; // if camera running
-      updateDownloadButtons();
-      statusEl.textContent = "Status: ready";
-    }
-
-    // ---------- MediaPipe Hands ----------
-    function setupHands() {
-      hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-      });
-      hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.6
-      });
-
-      hands.onResults((results) => {
-        ensureOverlaySize();
-        const w = overlay.width, h = overlay.height;
-        octx.clearRect(0, 0, w, h);
-
-        // Only show target & process landmarks in Step 2
-        if (step !== 2) return;
-
-        const target = drawTargetCircle();
-
-        if (!(results.multiHandLandmarks && results.multiHandLandmarks.length > 0)) {
-          if (!thumbCaptured) {
-            history = [];
-            statusEl.textContent = "Status: Step 2 — show your hand to the camera";
-          }
-          return;
-        }
-
-        const lm = results.multiHandLandmarks[0];
-
-        // thumb tip = 4
-        const t = lm[4];
-        const thumbPx = { x: t.x * w, y: t.y * h };
-
-        // draw thumb dot
-        octx.beginPath();
-        octx.arc(thumbPx.x, thumbPx.y, 10, 0, Math.PI * 2);
-        octx.fillStyle = "#ff0";
-        octx.fill();
-
-        const inside = dist(thumbPx, target) <= TARGET_RADIUS;
-
-        if (!thumbCaptured) {
-          if (inside) {
-            history.push(thumbPx);
-            if (history.length > STEADY_WINDOW) history.shift();
-            statusEl.textContent = `Status: Step 2 — in circle (${history.length}/${NEED_STEADY_FRAMES}) hold steady`;
-          } else {
-            history = [];
-            statusEl.textContent = "Status: Step 2 — move thumb tip into circle";
-          }
-
-          if (inside && isSteady(history)) {
-            thumbCaptured = true;
-            thumbDataUrl = captureThumbCrop(thumbPx);
-            thumbPreview.src = thumbDataUrl;
-            statusEl.textContent = "Status: Thumb CAPTURED ✅";
-            updateDownloadButtons();
-          }
-        }
-      });
-    }
-
-    // ---------- Start camera ----------
-    async function startCamera() {
-      btnStart.disabled = true;
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }, // back camera is better for paper
-        audio: false
-      });
-      video.srcObject = stream;
-      await video.play();
-      ensureOverlaySize();
-
-      setupHands();
-
-      camera = new Camera(video, {
-        onFrame: async () => { await hands.send({ image: video }); },
-        width: 640, height: 480
-      });
-      camera.start();
-
-      btnCaptureSig.disabled = false;
-      btnReset.disabled = false;
-      statusEl.textContent = "Status: Step 1 — capture signature photo (paper)";
-    }
-
-    // ---------- Buttons ----------
-    btnStart.onclick = () => startCamera().catch(err => {
-      console.error(err);
-      btnStart.disabled = false;
-      alert("Camera start failed: " + err.message);
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }, // back cam for paper
+      audio: true
     });
 
-    btnCaptureSig.onclick = () => {
-      // Capture full frame as signature evidence (physical)
-      sigDataUrl = captureFullFrame();
-      sigPreview.src = sigDataUrl;
+    preview.srcObject = stream;
+    await preview.play();
 
-      btnGoThumb.disabled = false;
-      statusEl.textContent = "Status: Signature photo CAPTURED ✅ (now go to thumb step)";
-      updateDownloadButtons();
+    // Setup MediaPipe Hands (for thumb presence status only)
+    hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+
+    hands.onResults((res) => {
+      // Only care in thumb step
+      if (step !== "thumb") return;
+
+      const hasHand = !!(res.multiHandLandmarks && res.multiHandLandmarks.length);
+      if (!hasHand) {
+        statusEl.textContent = "Status: (thumb step) no hand detected";
+        return;
+      }
+      // Thumb tip landmark exists if hand exists
+      statusEl.textContent = "Status: (thumb step) thumb/hand detected ✅";
+    });
+
+    // Drive frames to MediaPipe
+    mpCamera = new Camera(preview, {
+      onFrame: async () => { await hands.send({ image: preview }); },
+      width: 640,
+      height: 480
+    });
+    mpCamera.start();
+
+    btnStartRec.disabled = false;
+    btnStep1.disabled = false;
+    btnStep2.disabled = false;
+    btnStartCam.disabled = true;
+
+    setStep("paper");
+    statusEl.textContent = "Status: camera ready";
+  }
+
+  function startRecording() {
+    if (!stream) return;
+
+    chunks = [];
+    recordedBlob = null;
+    playback.removeAttribute("src");
+    btnDownload.disabled = true;
+
+    const mimeType = pickBestMime();
+    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
     };
 
-    btnGoThumb.onclick = () => {
-      setStep(2);
-      history = [];
-      thumbCaptured = false;
-      statusEl.textContent = "Status: Step 2 — show thumb tip in circle and hold steady";
+    recorder.onstop = () => {
+      recordedBlob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+      const url = URL.createObjectURL(recordedBlob);
+      playback.src = url;
+      btnDownload.disabled = false;
+      statusEl.textContent = "Status: recorded ✅ (ready to download)";
     };
 
-    btnReset.onclick = () => {
-      resetAll();
-    };
+    recorder.start(250); // collect data every 250ms
+    btnStartRec.disabled = true;
+    btnStopRec.disabled = false;
+    statusEl.textContent = "Status: recording...";
+    setStep("paper"); // start with paper
+  }
 
-    btnDownloadSig.onclick = () => {
-      if (!sigDataUrl) return;
-      downloadDataUrl("physical_signature_photo.png", sigDataUrl);
-    };
+  function stopRecording() {
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    btnStopRec.disabled = true;
+    btnStartRec.disabled = false;
+    setStep("idle");
+  }
 
-    btnDownloadThumb.onclick = () => {
-      if (!thumbDataUrl) return;
-      downloadDataUrl("thumb_presence.png", thumbDataUrl);
-    };
+  function downloadVideo() {
+    if (!recordedBlob) return;
+    const url = URL.createObjectURL(recordedBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "signature_and_thumb_video.webm";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // keep url around for playback; don't revoke immediately
+  }
 
-    btnDownloadBoth.onclick = () => {
-      if (sigDataUrl) downloadDataUrl("physical_signature_photo.png", sigDataUrl);
-      if (thumbDataUrl) downloadDataUrl("thumb_presence.png", thumbDataUrl);
-    };
+  // UI actions
+  btnStartCam.onclick = () => startCamera().catch(err => {
+    console.error(err);
+    alert("Camera start failed: " + err.message);
+  });
 
-    // init
-    setStep(1);
-    updateDownloadButtons();
-  </script>
+  btnStartRec.onclick = () => startRecording();
+  btnStopRec.onclick = () => stopRecording();
+
+  btnStep1.onclick = () => {
+    setStep("paper");
+    statusEl.textContent = "Status: show the signed paper clearly in frame";
+  };
+
+  btnStep2.onclick = () => {
+    setStep("thumb");
+    statusEl.textContent = "Status: show your thumb close to the camera";
+  };
+
+  btnDownload.onclick = () => downloadVideo();
+</script>
 </body>
 </html>
