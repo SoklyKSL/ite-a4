@@ -1,1 +1,366 @@
 
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signature + Thumb Presence Capture (Demo)</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    video, canvas { width: 100%; border-radius: 12px; background: #111; }
+    .small { font-size: 12px; color: #444; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .status { font-weight: 600; }
+    img { width: 100%; border-radius: 12px; border: 1px solid #ddd; background: #fafafa; }
+  </style>
+</head>
+<body>
+  <h2>Capture Signature + Thumb Presence (Demo)</h2>
+  <p class="small">
+    Flow: (1) Start camera → (2) Put thumb tip into circle and hold steady → (3) Sign in the signature pad → (4) Download evidence.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Thumb Presence (Camera)</h3>
+      <div style="position:relative;">
+        <video id="video" playsinline></video>
+        <canvas id="overlay" style="position:absolute; left:0; top:0;"></canvas>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="btnStart">Start camera</button>
+        <button id="btnReset" disabled>Reset capture</button>
+        <span class="status" id="thumbStatus">Status: idle</span>
+      </div>
+
+      <p class="small">
+        This uses MediaPipe Hands landmarks to locate the thumb tip and captures a cropped image once steady.
+      </p>
+
+      <h4>Captured Thumb Evidence</h4>
+      <img id="thumbPreview" alt="thumb preview (will appear after capture)" />
+    </div>
+
+    <div class="card">
+      <h3>Signature Pad</h3>
+      <canvas id="sig" height="220"></canvas>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="btnClearSig">Clear signature</button>
+      </div>
+
+      <p class="small">
+        Sign with mouse / touch. This is usually better than photographing paper signatures.
+      </p>
+
+      <h4>Download</h4>
+      <div class="row">
+        <button id="btnDownloadSig">Download signature PNG</button>
+        <button id="btnDownloadThumb" disabled>Download thumb PNG</button>
+        <button id="btnDownloadBoth" disabled>Download both</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
+
+  <script>
+    // ---------- Helpers ----------
+    function downloadDataUrl(filename, dataUrl) {
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function dist(a, b) { const dx = a.x - b.x; const dy = a.y - b.y; return Math.hypot(dx, dy); }
+
+    // ---------- UI elements ----------
+    const video = document.getElementById("video");
+    const overlay = document.getElementById("overlay");
+    const octx = overlay.getContext("2d");
+
+    const btnStart = document.getElementById("btnStart");
+    const btnReset = document.getElementById("btnReset");
+    const thumbStatus = document.getElementById("thumbStatus");
+    const thumbPreview = document.getElementById("thumbPreview");
+
+    const sig = document.getElementById("sig");
+    const sctx = sig.getContext("2d");
+
+    const btnClearSig = document.getElementById("btnClearSig");
+    const btnDownloadSig = document.getElementById("btnDownloadSig");
+    const btnDownloadThumb = document.getElementById("btnDownloadThumb");
+    const btnDownloadBoth = document.getElementById("btnDownloadBoth");
+
+    // ---------- Signature pad ----------
+    function resizeSigCanvas() {
+      const cssW = sig.clientWidth;
+      const cssH = sig.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      sig.width = Math.floor(cssW * dpr);
+      sig.height = Math.floor(cssH * dpr);
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // white background for exported PNG
+      sctx.fillStyle = "#fff";
+      sctx.fillRect(0, 0, cssW, cssH);
+
+      sctx.lineWidth = 3;
+      sctx.lineCap = "round";
+      sctx.strokeStyle = "#000";
+    }
+
+    let drawing = false;
+    let last = null;
+
+    function getPos(e) {
+      const rect = sig.getBoundingClientRect();
+      const t = e.touches && e.touches[0];
+      const x = (t ? t.clientX : e.clientX) - rect.left;
+      const y = (t ? t.clientY : e.clientY) - rect.top;
+      return {x, y};
+    }
+
+    function startDraw(e) {
+      drawing = true;
+      last = getPos(e);
+      e.preventDefault();
+    }
+    function moveDraw(e) {
+      if (!drawing) return;
+      const p = getPos(e);
+      sctx.beginPath();
+      sctx.moveTo(last.x, last.y);
+      sctx.lineTo(p.x, p.y);
+      sctx.stroke();
+      last = p;
+      e.preventDefault();
+    }
+    function endDraw(e) {
+      drawing = false;
+      last = null;
+      e.preventDefault();
+    }
+
+    sig.addEventListener("mousedown", startDraw);
+    sig.addEventListener("mousemove", moveDraw);
+    window.addEventListener("mouseup", endDraw);
+
+    sig.addEventListener("touchstart", startDraw, {passive:false});
+    sig.addEventListener("touchmove", moveDraw, {passive:false});
+    sig.addEventListener("touchend", endDraw, {passive:false});
+
+    btnClearSig.onclick = () => resizeSigCanvas();
+
+    btnDownloadSig.onclick = () => {
+      const dataUrl = sig.toDataURL("image/png");
+      downloadDataUrl("signature.png", dataUrl);
+    };
+
+    // ---------- Thumb presence detection ----------
+    const TARGET_RADIUS = 55;
+    const STEADY_WINDOW = 12;
+    const STEADY_MAX_MOVE = 18;
+    const NEED_STEADY_FRAMES = 10;
+
+    let camera = null;
+    let hands = null;
+
+    let history = []; // last thumb positions
+    let capturedThumbDataUrl = null;
+    let captured = false;
+
+    function resetThumb() {
+      history = [];
+      capturedThumbDataUrl = null;
+      captured = false;
+      thumbPreview.removeAttribute("src");
+      btnDownloadThumb.disabled = true;
+      btnDownloadBoth.disabled = true;
+      thumbStatus.textContent = "Status: waiting for thumb...";
+    }
+
+    btnReset.onclick = () => resetThumb();
+
+    btnDownloadThumb.onclick = () => {
+      if (!capturedThumbDataUrl) return;
+      downloadDataUrl("thumb_presence.png", capturedThumbDataUrl);
+    };
+
+    btnDownloadBoth.onclick = () => {
+      // simple: download two files one after another
+      const sigUrl = sig.toDataURL("image/png");
+      downloadDataUrl("signature.png", sigUrl);
+      if (capturedThumbDataUrl) downloadDataUrl("thumb_presence.png", capturedThumbDataUrl);
+    };
+
+    function ensureOverlaySize() {
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 480;
+      overlay.width = w;
+      overlay.height = h;
+    }
+
+    function drawTarget(target) {
+      octx.save();
+      octx.beginPath();
+      octx.arc(target.x, target.y, TARGET_RADIUS, 0, Math.PI * 2);
+      octx.lineWidth = 3;
+      octx.strokeStyle = "#00ff88";
+      octx.stroke();
+      octx.restore();
+    }
+
+    function captureThumbCrop(thumbPx) {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+
+      // draw current frame to a temp canvas
+      const temp = document.createElement("canvas");
+      temp.width = w;
+      temp.height = h;
+      const tctx = temp.getContext("2d");
+      tctx.drawImage(video, 0, 0, w, h);
+
+      // crop around thumb
+      const r = 140;
+      const x1 = clamp(Math.floor(thumbPx.x - r), 0, w);
+      const y1 = clamp(Math.floor(thumbPx.y - r), 0, h);
+      const x2 = clamp(Math.floor(thumbPx.x + r), 0, w);
+      const y2 = clamp(Math.floor(thumbPx.y + r), 0, h);
+
+      const cw = x2 - x1;
+      const ch = y2 - y1;
+
+      const crop = document.createElement("canvas");
+      crop.width = cw;
+      crop.height = ch;
+      const cctx = crop.getContext("2d");
+      cctx.drawImage(temp, x1, y1, cw, ch, 0, 0, cw, ch);
+
+      return crop.toDataURL("image/png");
+    }
+
+    function isSteady(hist) {
+      if (hist.length < NEED_STEADY_FRAMES) return false;
+      const base = hist[0];
+      let maxD = 0;
+      for (const p of hist) maxD = Math.max(maxD, dist(p, base));
+      return maxD <= STEADY_MAX_MOVE;
+    }
+
+    async function startApp() {
+      resetThumb();
+      btnStart.disabled = true;
+
+      // Request camera
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      video.srcObject = stream;
+      await video.play();
+
+      ensureOverlaySize();
+      btnReset.disabled = false;
+
+      // Setup MediaPipe Hands
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+      });
+
+      hands.onResults((results) => {
+        ensureOverlaySize();
+        const w = overlay.width;
+        const h = overlay.height;
+
+        octx.clearRect(0, 0, w, h);
+
+        // Target in center
+        const target = { x: w / 2, y: h / 2 };
+        drawTarget(target);
+
+        let thumbPx = null;
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+          const lm = results.multiHandLandmarks[0];
+
+          // Thumb tip index = 4
+          const t = lm[4];
+          thumbPx = { x: t.x * w, y: t.y * h };
+
+          // Draw thumb point
+          octx.beginPath();
+          octx.arc(thumbPx.x, thumbPx.y, 10, 0, Math.PI * 2);
+          octx.fillStyle = "#ff0";
+          octx.fill();
+
+          // If thumb is inside target circle, track history, else reset history
+          const inside = dist(thumbPx, target) <= TARGET_RADIUS;
+          if (inside && !captured) {
+            history.push(thumbPx);
+            if (history.length > STEADY_WINDOW) history.shift();
+          } else if (!inside && !captured) {
+            history = [];
+          }
+
+          const steady = !captured && isSteady(history);
+          if (!captured) {
+            if (inside) {
+              thumbStatus.textContent = `Status: in circle (${history.length}/${NEED_STEADY_FRAMES})`;
+            } else {
+              thumbStatus.textContent = "Status: move thumb tip into circle";
+            }
+            if (steady) {
+              captured = true;
+              capturedThumbDataUrl = captureThumbCrop(thumbPx);
+              thumbPreview.src = capturedThumbDataUrl;
+              thumbStatus.textContent = "Status: CAPTURED ✅";
+              btnDownloadThumb.disabled = false;
+              btnDownloadBoth.disabled = false;
+            }
+          }
+        } else if (!captured) {
+          history = [];
+          thumbStatus.textContent = "Status: show your hand to the camera";
+        }
+      });
+
+      // Use MediaPipe camera helper to drive frames into hands.process()
+      camera = new Camera(video, {
+        onFrame: async () => { await hands.send({ image: video }); },
+        width: 640,
+        height: 480
+      });
+      camera.start();
+    }
+
+    // Resize signature canvas when layout changes
+    window.addEventListener("resize", resizeSigCanvas);
+    // initial
+    setTimeout(resizeSigCanvas, 0);
+
+    btnStart.onclick = () => startApp().catch(err => {
+      console.error(err);
+      btnStart.disabled = false;
+      alert("Camera start failed: " + err.message);
+    });
+  </script>
+</body>
+</html>
